@@ -41,3 +41,25 @@ function saveStudy(e,id){e.preventDefault();const f=new FormData(e.target),answe
 function catalog(){content.innerHTML=`<div class="actions"><p class="muted">Activa, desactiva o agrega preguntas. Los cambios se reflejan de inmediato en el cuestionario.</p><div><a class="btn" href="assets/Plantilla_Cuestionario_CR3.xlsx" download>⇩ Descargar plantilla Excel</a> <button class="primary" onclick="addQuestion()">+ Nueva pregunta</button></div></div><div class="card"><div class="catalog-row"><b>Sección</b><b>Pregunta</b><b>Tipo</b><b>Opciones</b><b>Acción</b></div>${questions.map(q=>`<div class="catalog-row"><span>${esc(q.section)}</span><span>${esc(q.label)}</span><small>${esc(q.type)}</small><small>${esc(q.options||'—')}</small><div class="catalog-actions"><button class="link-button" onclick="toggleQuestion('${q.id}')">${q.active?'Dar de baja':'Activar'}</button><button class="link-button danger" onclick="deleteQuestion('${q.id}')">Eliminar</button></div></div>`).join('')}</div>`}
 function addQuestion(){const section=prompt('Sección de la pregunta:');if(!section)return;const label=prompt('Pregunta:');if(!label)return;const type=prompt('Tipo: Texto, Texto largo, Número, Opción, Selección múltiple o Sí/No','Texto')||'Texto';const options=/Opción|Selección múltiple/.test(type)?prompt('Opciones separadas por punto y coma:')||'':'';questions.push({id:'custom-'+Date.now(),section,label,type,options,active:true});saveQuestions();catalog()}function toggleQuestion(id){questions=questions.map(q=>q.id===id?{...q,active:!q.active}:q);saveQuestions();catalog()}function deleteQuestion(id){if(confirm('¿Eliminar definitivamente esta pregunta?')){questions=questions.filter(q=>q.id!==id);saveQuestions();catalog()}}
 function reports(){content.innerHTML=`<div class="actions"><p class="muted">Descarga los registros capturados o la plantilla editable del cuestionario.</p><div><a class="btn" href="assets/Plantilla_Cuestionario_CR3.xlsx" download>⇩ Plantilla de preguntas</a> <button class="primary" onclick="downloadCSV()">⇩ Exportar respuestas CSV</button></div></div><div class="two"><div class="card"><h2>Registros capturados</h2><p style="font-size:34px;font-weight:bold">${records.length}</p><p class="muted">Estudios disponibles para exportación.</p></div><div class="card"><h2>Plantilla Excel</h2><p class="muted">Incluye las 36 preguntas del cuestionario socioeconómico, sus secciones, tipo de respuesta y opciones. Puedes conservarla como respaldo o usarla para revisar el catálogo.</p><a class="btn" href="assets/Plantilla_Cuestionario_CR3.xlsx" download>Descargar plantilla .xlsx</a></div></div>`}
+
+// Persistencia compartida en Supabase. Los cambios locales se envían a la nube.
+const cloud = window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY);
+let cloudReady = false;
+async function loadCloudData(){
+  const [studies, catalogRows] = await Promise.all([
+    cloud.from('estudios_registros').select('payload').order('updated_at',{ascending:false}),
+    cloud.from('estudios_catalogo').select('payload').order('updated_at',{ascending:true})
+  ]);
+  if(studies.error || catalogRows.error){alert('No se pudo conectar con la base de datos. Ejecuta primero supabase-schema.sql en Supabase.');console.error(studies.error || catalogRows.error);return false}
+  records=studies.data.map(row=>row.payload);
+  if(catalogRows.data.length) questions=catalogRows.data.map(row=>row.payload);
+  else await syncCatalog();
+  cloudReady=true;return true;
+}
+async function syncRecords(){if(!cloudReady)return;const rows=records.map(r=>({id:String(r.id),payload:r,updated_at:new Date().toISOString()}));if(rows.length){const {error}=await cloud.from('estudios_registros').upsert(rows);if(error){console.error(error);alert('No se pudo guardar el estudio en la nube.')}}}
+async function syncCatalog(){const rows=questions.map(q=>({id:String(q.id),payload:q,updated_at:new Date().toISOString()}));if(rows.length){const {error}=await cloud.from('estudios_catalogo').upsert(rows);if(error)console.error(error)}}
+function save(){localStorage.setItem(KEY,JSON.stringify(records));void syncRecords()}
+function saveQuestions(){localStorage.setItem(QUESTION_KEY,JSON.stringify(questions));void syncCatalog()}
+function removeRecord(id){if(confirm('¿Eliminar este registro?')){records=records.filter(r=>r.id!==id);save();void cloud.from('estudios_registros').delete().eq('id',String(id));collaborators()}}
+function deleteQuestion(id){if(confirm('¿Eliminar definitivamente esta pregunta?')){questions=questions.filter(q=>q.id!==id);saveQuestions();void cloud.from('estudios_catalogo').delete().eq('id',String(id));catalog()}}
+document.querySelector('#login-form').onsubmit=async e=>{e.preventDefault();if(document.querySelector('#email').value!=='admin@empresa.com'||document.querySelector('#password').value!=='admin123'){alert('Credenciales incorrectas');return}const ok=await loadCloudData();if(ok){loginScreen.hidden=true;appScreen.hidden=false;dashboard()}};
